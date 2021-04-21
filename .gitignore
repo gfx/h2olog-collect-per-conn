@@ -1,0 +1,10 @@
+authn.json
+*.d
+
+# example input
+/*.jsonl
+
+# example output
+qtr
+
+build*/
