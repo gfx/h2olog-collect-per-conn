@@ -188,7 +188,9 @@ func readJSONLine(out chan []h2ologEvent, reader io.Reader) {
 
 // build a unique GCS object name from events
 func buildObjectName(events []h2ologEvent) string {
-	return fmt.Sprintf("%s-test", host) // FIXME
+	event := events[0]
+	connID := event.rawEvent["conn"]
+	return fmt.Sprintf("%s-%v", host, connID) // FIXME
 }
 
 func serializeEvents(rawEvents []h2ologEvent) ([]byte, error) {

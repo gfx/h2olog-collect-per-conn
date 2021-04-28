@@ -3,6 +3,9 @@ CURRENT_REVISION = $(shell git rev-parse --short HEAD)
 # see `go tool link -help`
 BUILD_LDFLAGS = "-X main.revision=$(CURRENT_REVISION)"
 
+H2O_REPO =  ~/ghq/github.com/h2o/h2o/
+QLOG_ADAPTER = $(H2O_REPO)/deps/quicly/misc/qlog-adapter.py
+
 CMD = h2olog-collector-gcs
 
 all: deps build/$(CMD) build.linux-amd64/$(CMD)
@@ -34,7 +37,10 @@ test-load: build/$(CMD)
 .PHONY: test
 
 test: build/$(CMD)
-	./build/$(CMD) -debug -host foo -local ./tmp < test/test.jsonl
+	./build/$(CMD) -debug -host test -local ./tmp < test/test.jsonl
+	find tmp -name 'test-*.json' | cut --delimiter " " --fields 1 | xargs cat | jq -c '.payload[]' > tmp/test-raw.jsonl
+	$(QLOG_ADAPTER) tmp/test-raw.jsonl | jq .
+
 .PHONY: test-single-run
 
 clean:

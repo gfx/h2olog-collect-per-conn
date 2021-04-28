@@ -16,6 +16,26 @@ A log collector for [h2olog](https://github.com/toru/h2olog) to store per-connec
 
 Or, you can use `make release-linux` to build a binary for Linux.
 
+## Visualize the logs
+
+Given `object.json` is a log file.
+
+### Extract raw h2olog outputs from the log file
+
+```shell-session
+jq -c '.payload[]' < object.json > raw.jsonl
+```
+
+### Convert the output to QLog
+
+```shell-session
+qlog-adapter.py raw.jsonl > qlog.json
+```
+
+### Visualize it with QVis
+
+Upload qlog.json to https://qvis.quictools.info/
+
 ## Copyright
 
 Copyright (c) 2019-2020 Fastly, Inc., FUJI Goro
