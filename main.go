@@ -21,7 +21,6 @@ import (
 	"google.golang.org/api/option"
 )
 
-const numWorkers = 16
 const chanBufferSize = 5000
 const maxSentPn = 10
 const maxAckedPn = 10
@@ -29,6 +28,8 @@ const tickDuration = 10 * time.Millisecond
 
 const capacityOfEvents = 4096 // a hint for better performance
 
+var numWorkers = 16
+var host string // -host=s
 var debug bool // -debug
 var count uint64 = 0
 
@@ -41,8 +42,16 @@ var authnJson []byte
 
 var revision string
 type h2ologEvent struct {
-	rawEvent  map[string]interface{} // a JSON string
-	createdAt time.Time
+	rawEvent  map[string]interface{}
+	createdAt time.Time // the time when this event is read by the program
+}
+
+// the schema for GCS objects
+type h2ologEventRoot struct {
+	Host string `json:"host"`
+	StartTime time.Time `json:"start_time"`
+	EndTime time.Time `json:"end_time"`
+	Payload []map[string]interface{} `json:"payload"`
 }
 
 // value of connToLogs
@@ -60,26 +69,18 @@ type storageManager struct {
 	localDir *string
 }
 
-func (self *storageManager) write(objectName string, payload []byte) error {
+func (self *storageManager) write(objectName string, data []byte) error {
 	if self.localDir != nil {
 		filePath := path.Join(*self.localDir, objectName + ".json")
-		writer, err := os.Create(filePath)
+		err := os.WriteFile(filePath, data, os.ModePerm)
 		if err != nil {
-			log.Fatalf("Cannot create file \"%v\": %v", filePath, err)
-		}
-		_, err = writer.Write(payload)
-		if err != nil {
-			log.Fatalf("Cannot write to \"%v\": %v", filePath, err)
-		}
-		err = writer.Close()
-		if err != nil {
-			log.Fatalf("Cannot close the file \"%v\": %v", filePath, err)
+			log.Fatalf("Cannot write data to a file \"%v\": %v", filePath, err)
 		}
 	}
 	if self.bucket != nil {
 		object := self.bucket.Object(objectName)
 		writer := object.NewWriter(self.ctx)
-		_, err := writer.Write(payload)
+		_, err := writer.Write(data)
 		if err != nil {
 			return err
 		}
@@ -185,7 +186,20 @@ func readJSONLine(out chan []h2ologEvent, reader io.Reader) {
 
 // build a unique GCS object name from events
 func buildObjectName(events []h2ologEvent) string {
-	return "test" // FIXME
+	return fmt.Sprintf("%s-test", host) // FIXME
+}
+
+func serializeEvents(rawEvents []h2ologEvent) ([]byte, error) {
+	events := make([]map[string]interface{}, 0, len(rawEvents))
+	for _, event := range rawEvents {
+		events = append(events, event.rawEvent)
+	}
+	return json.Marshal(h2ologEventRoot {
+		Host: host,
+		StartTime: rawEvents[0].createdAt,
+		EndTime: rawEvents[len(rawEvents) - 1].createdAt,
+		Payload: events,
+	})
 }
 
 func uploadEvents(ctx context.Context, latch *sync.WaitGroup, in chan []h2ologEvent, storage *storageManager, workerID int) {
@@ -203,7 +217,7 @@ func uploadEvents(ctx context.Context, latch *sync.WaitGroup, in chan []h2ologEv
 	for range ticker.C {
 		select {
 		case events := <-in:
-			payload, err := json.Marshal(events)
+			payload, err := serializeEvents(events)
 			if err != nil {
 				log.Fatalf("[%02d] Cannot serialize events: %v", workerID, err)
 			}
@@ -225,9 +239,21 @@ func uploadEvents(ctx context.Context, latch *sync.WaitGroup, in chan []h2ologEv
 	}
 }
 
+func mustHostname() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Fatalf("Cannot get hostname: %v", err)
+	}
+	return hostname
+}
+
 func main() {
+	hostname := mustHostname()
+
 	var localDir string
 	var gcsBucketID string
+	flag.IntVar(&numWorkers, "workers", numWorkers, fmt.Sprintf("The number of workers (default: %d)", numWorkers))
+	flag.StringVar(&host, "host", hostname, fmt.Sprintf("The hostname (default: %s)", hostname))
 	flag.StringVar(&localDir, "local", "", "A local directory in which it stores logs")
 	flag.StringVar(&gcsBucketID, "bucket", "", "A GCS bucket ID in which it stores logs")
 	flag.BoolVar(&debug, "debug", false, "Emit debug logs to STDERR")

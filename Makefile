@@ -26,12 +26,15 @@ update-deps:
 	go get -u -v
 	go mod tidy -v
 
-test: build/$(CMD)
-	for n in {1..20} ; do echo "Testing #$n" ; ./build/$(CMD) -dry-run -debug h2olog < test/test.jsonl ; done
+test-load: build/$(CMD)
+	for n in {1..20} ; \
+		do echo "Testing #$n" ; \
+			./build/$(CMD) -debug -local ./tmp < test/test.jsonl ; \
+		done
 .PHONY: test
 
-test-single-run: build/$(CMD)
-	./build/$(CMD) -debug -local tmp < test/test.jsonl
+test: build/$(CMD)
+	./build/$(CMD) -debug -host foo -local ./tmp < test/test.jsonl
 .PHONY: test-single-run
 
 clean:
