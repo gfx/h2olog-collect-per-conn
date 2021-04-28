@@ -5,7 +5,7 @@ BUILD_LDFLAGS = "-X main.revision=$(CURRENT_REVISION)"
 
 CMD = h2olog-collector-gcs
 
-all: deps build/$(CMD) build.linux-amd64/$(GCS)
+all: deps build/$(CMD) build.linux-amd64/$(CMD)
 .PHONY: all
 
 build.linux-amd64/$(CMD): deps go.mod main.go
