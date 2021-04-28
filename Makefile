@@ -31,7 +31,7 @@ test: build/$(CMD)
 .PHONY: test
 
 test-single-run: build/$(CMD)
-	./build/$(CMD) -dry-run -debug h2olog < test/test.jsonl
+	./build/$(CMD) -debug -local tmp < test/test.jsonl
 .PHONY: test-single-run
 
 clean:

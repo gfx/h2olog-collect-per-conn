@@ -4,7 +4,7 @@ authn.json
 # example input
 /*.jsonl
 
-# example output
-qtr
-
 build*/
+
+# test output
+tmp/
