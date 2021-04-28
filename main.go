@@ -145,7 +145,7 @@ func readJSONLine(out chan []h2ologEvent, reader io.Reader) {
 		} else {
 			entry = &logEntry{
 				connID:  connID,
-				events:  make([]h2ologEvent, 1, capacityOfEvents),
+				events:  make([]h2ologEvent, 0, capacityOfEvents),
 				sentPn:  -1,
 				ackedPn: -1,
 				uploaded: false,
