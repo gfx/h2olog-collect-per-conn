@@ -34,14 +34,16 @@ test-load: build/$(CMD)
 		do echo "Testing #$n" ; \
 			./build/$(CMD) -debug -local ./tmp < test/test.jsonl ; \
 		done
-.PHONY: test
+.PHONY: test-load
 
 test: build/$(CMD)
 	./build/$(CMD) -debug -host test -local ./tmp < test/test.jsonl
+.PHONY: test
+
+test-qlog-adapter: test
 	find tmp -name 'test-*.json' | cut --delimiter " " --fields 1 | xargs cat | jq -c '.payload[]' > tmp/test-raw.jsonl
 	$(QLOG_ADAPTER) tmp/test-raw.jsonl | jq .
-
-.PHONY: test-single-run
+.PHONY: test-qlog-adapter
 
 clean:
 	rm -rf build build.linux-amd64 *.d
