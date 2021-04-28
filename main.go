@@ -40,6 +40,8 @@ var connToLogs = mustLruMap(10000)
 //go:embed authn.json
 var authnJson []byte
 
+//go:embed VERSION
+var version string
 var revision string
 type h2ologEvent struct {
 	rawEvent  map[string]interface{}
@@ -252,12 +254,19 @@ func main() {
 
 	var localDir string
 	var gcsBucketID string
+	var showVersion bool
 	flag.IntVar(&numWorkers, "workers", numWorkers, fmt.Sprintf("The number of workers (default: %d)", numWorkers))
 	flag.StringVar(&host, "host", hostname, fmt.Sprintf("The hostname (default: %s)", hostname))
 	flag.StringVar(&localDir, "local", "", "A local directory in which it stores logs")
 	flag.StringVar(&gcsBucketID, "bucket", "", "A GCS bucket ID in which it stores logs")
 	flag.BoolVar(&debug, "debug", false, "Emit debug logs to STDERR")
+	flag.BoolVar(&showVersion, "version", false, "Show the revision and exit")
 	flag.Parse()
+
+	if (showVersion) {
+		fmt.Printf("%s (rev: %s)\n", strings.TrimSpace(version), revision)
+		os.Exit(0)
+	}
 
 	if len(flag.Args()) != 0 {
 		command := filepath.Base(os.Args[0])
