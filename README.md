@@ -8,7 +8,7 @@ A log collector for [h2olog](https://github.com/toru/h2olog) to store per-connec
 * [h2olog](https://github.com/toru/h2olog)
 * Google Cloud Storage bucket
 * GCP authentication file named `authn.json`
-
+  * permission for `storage.objects.create` for the target bucket
 
 ## Build
 
