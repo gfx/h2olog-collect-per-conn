@@ -188,9 +188,21 @@ func readJSONLine(out chan []h2ologEvent, reader io.Reader) {
 
 // build a unique GCS object name from events
 func buildObjectName(events []h2ologEvent) string {
-	event := events[0]
-	connID := event.rawEvent["conn"]
-	return fmt.Sprintf("%s-%v", host, connID) // FIXME
+	// find the quicly:accept event, which probably exists in the first few events.
+	for _, event := range events {
+		if event.rawEvent["type"] == "accept" {
+			dcid := event.rawEvent["dcid"]
+			if dcid == nil {
+				panic("No dcid is set in quicly:accept")
+			}
+			time := event.rawEvent["time"]
+			if time == nil {
+				panic("No time is set in quicly:accept")
+			}
+			return fmt.Sprintf("%s-%v-%v", host, dcid, time)
+		}
+	}
+	panic("No quicly:accept is found in events")
 }
 
 func serializeEvents(rawEvents []h2ologEvent) ([]byte, error) {
