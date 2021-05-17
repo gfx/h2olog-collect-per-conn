@@ -222,7 +222,7 @@ func readJSONLine(ctx context.Context, storage *storageManager, reader io.Reader
 }
 
 // build a unique GCS object name from events
-func buildObjectName(entry *logEntry) string {
+func buildObjectName(entry *logEntry) (string, error) {
 	// find the quicly:accept event, which probably exists in the first few events.
 	for _, rawEvent := range entry.events {
 		if rawEvent["type"] == "accept" {
@@ -234,10 +234,11 @@ func buildObjectName(entry *logEntry) string {
 			if time == nil {
 				panic("No time is set in quicly:accept")
 			}
-			return fmt.Sprintf("%s-%v-%v", host, dcid, time)
+			return fmt.Sprintf("%s-%v-%v", host, dcid, time), nil
 		}
 	}
-	panic("No quicly:accept is found in events")
+	return "", fmt.Errorf("No quicly:accept is found in events (first event type=%s, events=%v)",
+		entry.events[0]["type"], len(entry.events))
 }
 
 func serializeEvents(ID string, entry *logEntry) ([]byte, error) {
@@ -258,7 +259,12 @@ func serializeEvents(ID string, entry *logEntry) ([]byte, error) {
 func uploadEvents(ctx context.Context, latch *sync.WaitGroup, storage *storageManager, entry *logEntry) {
 	defer latch.Done()
 
-	objectName := buildObjectName(entry)
+	objectName, err := buildObjectName(entry)
+	if err != nil {
+		log.Printf("Failed to build the object name: %v", err)
+		return
+	}
+
 	payload, err := serializeEvents(objectName, entry)
 	if err != nil {
 		log.Fatalf("Cannot serialize events: %v", err)
