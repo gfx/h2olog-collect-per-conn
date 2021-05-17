@@ -93,18 +93,20 @@ func (self *storageManager) write(objectName string, data []byte) error {
 		filePath := path.Join(*self.localDir, objectName+".json")
 		err := os.WriteFile(filePath, data, os.ModePerm)
 		if err != nil {
-			log.Fatalf("Cannot write data to a file \"%v\": %v", filePath, err)
+			return err
 		}
 	}
 	if self.bucket != nil {
 		object := self.bucket.Object(objectName)
 		writer := object.NewWriter(self.ctx)
+		writer.ContentType = "application/json; utf-8"
 		_, err := writer.Write(data)
 		if err != nil {
 			return err
 		}
 		err = writer.Close()
 		if err != nil {
+			// TODO: handle temporary server errors
 			return err
 		}
 	}
@@ -277,9 +279,11 @@ func uploadEvents(ctx context.Context, latch *sync.WaitGroup, in chan *logEntry,
 
 			err = storage.write(objectName, payload)
 			if err == nil {
-				log.Printf("[%02d] Uploaded payload as \"%v\" (number of events = %v)", workerID, objectName, len(entry.events))
+				log.Printf("[%02d] Wrote the payload as \"%v\" (events=%v, bytes=%v)",
+					workerID, objectName, len(entry.events), len(payload))
 			} else {
-				log.Printf("[%02d] Failed to upload payload as \"%s\": %v", workerID, objectName, err)
+				log.Printf("[%02d] Failed to write the payload as \"%s\" (events=%v, bytes=%v): %v",
+					workerID, objectName, len(entry.events), len(payload), err)
 			}
 		default:
 		}
