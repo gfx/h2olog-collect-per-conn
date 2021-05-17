@@ -18,23 +18,39 @@ Or, you can use `make release-linux` to build a binary for Linux.
 
 ## Visualize the logs
 
-Given `object.json` is a log file.
+### Given `$URI` is a log object URI in GCS
+
+`$URI` is a URI format: `gcs://$bucket/$object`.
+
+To download it in the local filesystem (e.g. `object.json`):
+
+```sh
+gsutil cp $URI object.json
+```
+
+To show its metadata:
+
+```sh
+cat object.json | jq 'del(.payload)'
+```
 
 ### Extract raw h2olog outputs from the log file
 
-```shell-session
+```sh
 jq -c '.payload[]' < object.json > raw.jsonl
 ```
 
 ### Convert the output to QLog
 
-```shell-session
+```sh
 qlog-adapter.py raw.jsonl > qlog.json
 ```
 
+`qlog-adapter.py` is not bundled in this repo but placed in the h2o repo.
+
 ### Visualize it with QVis
 
-Upload qlog.json to https://qvis.quictools.info/
+Upload `qlog.json` to https://qvis.quictools.info/
 
 ## Copyright
 
