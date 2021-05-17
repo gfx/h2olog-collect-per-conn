@@ -209,7 +209,7 @@ func readJSONLine(ctx context.Context, storage *storageManager, reader io.Reader
 
 		if eventType == "free" {
 			if debug {
-				log.Printf("[debug] process events: living, connID=%d, type=%v, sentPn=%d, ackedPn=%d, numEvents=%d, len(events)=%d",
+				log.Printf("[D] process events: living, connID=%d, type=%v, sentPn=%d, ackedPn=%d, numEvents=%d, len(events)=%d",
 					connID, eventType, entry.sentPn, entry.ackedPn, entry.numEvents, len(entry.events))
 			}
 
@@ -273,7 +273,7 @@ func uploadEvents(ctx context.Context, latch *sync.WaitGroup, storage *storageMa
 	err = storage.write(objectName, payload)
 	if err == nil {
 		if debug {
-			log.Printf("[debug] Wrote the payload as \"%v\" (events=%v, bytes=%v)",
+			log.Printf("[D] Wrote the payload as \"%v\" (events=%v, bytes=%v)",
 				objectName, len(entry.events), len(payload))
 		}
 	} else {
@@ -343,6 +343,6 @@ func main() {
 	latch.Wait()
 
 	if debug {
-		log.Printf("[debug] Shutting down")
+		log.Printf("[D] Shutting down")
 	}
 }
