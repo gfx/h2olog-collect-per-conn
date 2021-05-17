@@ -25,13 +25,10 @@ const tickDuration = 10 * time.Millisecond
 
 const capacityOfEvents = 4096 // a hint for better performance
 
-var numWorkers = 16              // -workers
 var maxNumEvents int64 = 100_000 // -max-num-events
 var host = mustHostname()        // -host=s
 var debug bool                   // -debug
 var count uint64 = 0
-
-var finished bool = false
 
 var connToLogs = mustLruMap(10000)
 
@@ -131,7 +128,7 @@ func clientOption() option.ClientOption {
 	return option.WithCredentialsJSON(authnJson)
 }
 
-func readJSONLine(out chan *logEntry, reader io.Reader) {
+func readJSONLine(ctx context.Context, storage *storageManager, reader io.Reader, latch *sync.WaitGroup) {
 	scanner := bufio.NewScanner(reader)
 
 	for scanner.Scan() {
@@ -212,12 +209,14 @@ func readJSONLine(out chan *logEntry, reader io.Reader) {
 
 		if eventType == "free" {
 			if debug {
-				log.Printf("[debug] Send events: connID=%d, type=%v, sentPn=%d, ackedPn=%d, numEvents=%d, len(events)=%d",
+				log.Printf("[debug] process events: living, connID=%d, type=%v, sentPn=%d, ackedPn=%d, numEvents=%d, len(events)=%d",
 					connID, eventType, entry.sentPn, entry.ackedPn, entry.numEvents, len(entry.events))
 			}
 
 			entry.processed = true
-			out <- entry
+
+			latch.Add(1)
+			go uploadEvents(ctx, latch, storage, entry)
 		}
 	}
 }
@@ -256,41 +255,24 @@ func serializeEvents(ID string, entry *logEntry) ([]byte, error) {
 	})
 }
 
-func uploadEvents(ctx context.Context, latch *sync.WaitGroup, in chan *logEntry, storage *storageManager, workerID int) {
-	if debug {
-		log.Printf("[%02d] worker is starting", workerID)
+func uploadEvents(ctx context.Context, latch *sync.WaitGroup, storage *storageManager, entry *logEntry) {
+	defer latch.Done()
+
+	objectName := buildObjectName(entry)
+	payload, err := serializeEvents(objectName, entry)
+	if err != nil {
+		log.Fatalf("Cannot serialize events: %v", err)
 	}
-	defer func() {
+
+	err = storage.write(objectName, payload)
+	if err == nil {
 		if debug {
-			log.Printf("[%02d] worker is finished", workerID)
+			log.Printf("[debug] Wrote the payload as \"%v\" (events=%v, bytes=%v)",
+				objectName, len(entry.events), len(payload))
 		}
-		latch.Done()
-	}()
-
-	ticker := time.NewTicker(tickDuration)
-	for range ticker.C {
-		select {
-		case entry := <-in:
-			objectName := buildObjectName(entry)
-			payload, err := serializeEvents(objectName, entry)
-			if err != nil {
-				log.Fatalf("[%02d] Cannot serialize events: %v", workerID, err)
-			}
-
-			err = storage.write(objectName, payload)
-			if err == nil {
-				log.Printf("[%02d] Wrote the payload as \"%v\" (events=%v, bytes=%v)",
-					workerID, objectName, len(entry.events), len(payload))
-			} else {
-				log.Printf("[%02d] Failed to write the payload as \"%s\" (events=%v, bytes=%v): %v",
-					workerID, objectName, len(entry.events), len(payload), err)
-			}
-		default:
-		}
-
-		if finished {
-			break
-		}
+	} else {
+		log.Printf("Failed to write the payload as \"%s\" (events=%v, bytes=%v): %v",
+			objectName, len(entry.events), len(payload), err)
 	}
 }
 
@@ -312,7 +294,6 @@ func main() {
 	flag.StringVar(&localDir, "local", "", "A local directory in which it stores logs")
 	flag.StringVar(&gcsBucketID, "bucket", "", "A GCS bucket ID in which it stores logs")
 
-	flag.IntVar(&numWorkers, "workers", numWorkers, fmt.Sprintf("The number of workers (default: %d)", numWorkers))
 	flag.BoolVar(&debug, "debug", false, "Emit debug logs to STDERR")
 	flag.BoolVar(&showVersion, "version", false, "Show the revision and exit")
 	flag.Parse()
@@ -351,17 +332,7 @@ func main() {
 		storage.localDir = &localDir
 	}
 
-	ch := make(chan *logEntry, chanBufferSize)
-	defer close(ch)
-
 	latch := &sync.WaitGroup{}
-
-	for i := range make([]int, numWorkers) {
-		latch.Add(1)
-		go uploadEvents(ctx, latch, ch, &storage, i+1)
-	}
-
-	readJSONLine(ch, os.Stdin)
-	finished = true
+	readJSONLine(ctx, &storage, os.Stdin, latch)
 	latch.Wait()
 }
