@@ -25,11 +25,10 @@ const tickDuration = 10 * time.Millisecond
 
 const capacityOfEvents = 4096 // a hint for better performance
 
-var numWorkers = 16         // -workers
-var maxSentPn int64 = 1000  // -max-sent-pn or -max-pn
-var maxAckedPn int64 = 1000 // -max-acked-pn or -max-pn
-var host = mustHostname()   // -host=s
-var debug bool              // -debug
+var numWorkers = 16              // -workers
+var maxNumEvents int64 = 100_000 // -max-num-events
+var host = mustHostname()        // -host=s
+var debug bool                   // -debug
 var count uint64 = 0
 
 var finished bool = false
@@ -50,19 +49,29 @@ type h2ologEvent struct {
 
 // the schema for GCS objects
 type h2ologEventRoot struct {
-	Host      string                   `json:"host"`
-	StartTime time.Time                `json:"start_time"`
-	EndTime   time.Time                `json:"end_time"`
-	Payload   []map[string]interface{} `json:"payload"`
+	// metadata
+	ID        string    `json:"id"` // same as object Name
+	Host      string    `json:"host"`
+	StartTime time.Time `json:"start_time"`
+	EndTime   time.Time `json:"end_time"`
+	NumEvents uint64    `json:"num_events"`
+	ConnID    int64     `json:"conn_id"`
+	SentPn    int64     `json:"sent_pn"`
+	AckedPn   int64     `json:"acked_pn"`
+
+	// payload
+	Payload []map[string]interface{} `json:"payload"`
 }
 
 // value of connToLogs
 type logEntry struct {
-	connID   int64
-	events   []h2ologEvent
-	sentPn   int64 // the last packet number of "packet-sent"
-	ackedPn  int64 // the last packet number of "packet-acked"
-	uploaded bool
+	connID    int64
+	sentPn    int64 // the last packet number of "packet-sent"
+	ackedPn   int64 // the last packet number of "packet-acked"
+	processed bool
+	numEvents uint64
+
+	events []h2ologEvent
 }
 
 type storageManager struct {
@@ -112,7 +121,7 @@ func clientOption() option.ClientOption {
 	return option.WithCredentialsJSON(authnJson)
 }
 
-func readJSONLine(out chan []h2ologEvent, reader io.Reader) {
+func readJSONLine(out chan *logEntry, reader io.Reader) {
 	scanner := bufio.NewScanner(reader)
 
 	for scanner.Scan() {
@@ -144,52 +153,60 @@ func readJSONLine(out chan []h2ologEvent, reader io.Reader) {
 			entry = value.(*logEntry)
 		} else {
 			entry = &logEntry{
-				connID:   connID,
-				events:   make([]h2ologEvent, 0, capacityOfEvents),
-				sentPn:   -1,
-				ackedPn:  -1,
-				uploaded: false,
+				connID:    connID,
+				events:    make([]h2ologEvent, 0, capacityOfEvents),
+				sentPn:    -1,
+				ackedPn:   -1,
+				processed: false,
+				numEvents: 0,
 			}
 			connToLogs.Add(connID, entry)
 		}
 
-		if entry.uploaded {
+		if entry.processed {
 			continue
 		}
 
-		entry.events = append(entry.events, h2ologEvent{
-			rawEvent:  rawEvent,
-			createdAt: now,
-		})
-
 		eventType := rawEvent["type"]
-		if eventType == "packet-sent" {
+
+		if eventType == "packet-sent" { // quicly:packet_sent
 			pn, err := rawEvent["pn"].(json.Number).Int64()
 			if err == nil {
 				entry.sentPn = pn
 			}
-		} else if eventType == "packet-acked" {
+		} else if eventType == "packet-acked" { // quicly:packet_acked
 			pn, err := rawEvent["pn"].(json.Number).Int64()
 			if err == nil {
 				entry.ackedPn = pn
 			}
 		}
 
-		if eventType == "free" || entry.sentPn > maxSentPn || entry.ackedPn > maxAckedPn {
+		entry.numEvents++ // num skipped = entry.numEvents - len(entry.events)
+
+		// +1 is reserved for quicly:free, which is always recorded.
+		if (len(entry.events)+1) < int(maxNumEvents) || eventType == "free" {
+			entry.events = append(entry.events, h2ologEvent{
+				rawEvent:  rawEvent,
+				createdAt: now,
+			})
+		}
+
+		if eventType == "free" {
 			if debug {
-				log.Printf("[debug] Send events to workers: connID=%d, type=%v, sentPn=%d, ackedPn=%d, len(events)=%d", connID, eventType, entry.sentPn, entry.ackedPn, len(entry.events))
+				log.Printf("[debug] Send events: connID=%d, type=%v, sentPn=%d, ackedPn=%d, numEvents=%d, len(events)=%d",
+					connID, eventType, entry.sentPn, entry.ackedPn, entry.numEvents, len(entry.events))
 			}
 
-			entry.uploaded = true
-			out <- entry.events
+			entry.processed = true
+			out <- entry
 		}
 	}
 }
 
 // build a unique GCS object name from events
-func buildObjectName(events []h2ologEvent) string {
+func buildObjectName(entry *logEntry) string {
 	// find the quicly:accept event, which probably exists in the first few events.
-	for _, event := range events {
+	for _, event := range entry.events {
 		if event.rawEvent["type"] == "accept" {
 			dcid := event.rawEvent["dcid"]
 			if dcid == nil {
@@ -205,20 +222,26 @@ func buildObjectName(events []h2ologEvent) string {
 	panic("No quicly:accept is found in events")
 }
 
-func serializeEvents(rawEvents []h2ologEvent) ([]byte, error) {
+func serializeEvents(ID string, entry *logEntry) ([]byte, error) {
+	rawEvents := entry.events
 	events := make([]map[string]interface{}, 0, len(rawEvents))
 	for _, event := range rawEvents {
 		events = append(events, event.rawEvent)
 	}
 	return json.Marshal(h2ologEventRoot{
+		ID: ID,
 		Host:      host,
 		StartTime: rawEvents[0].createdAt,
 		EndTime:   rawEvents[len(rawEvents)-1].createdAt,
+		ConnID:    entry.connID,
+		SentPn:    entry.sentPn,
+		AckedPn:   entry.ackedPn,
+		NumEvents: entry.numEvents,
 		Payload:   events,
 	})
 }
 
-func uploadEvents(ctx context.Context, latch *sync.WaitGroup, in chan []h2ologEvent, storage *storageManager, workerID int) {
+func uploadEvents(ctx context.Context, latch *sync.WaitGroup, in chan *logEntry, storage *storageManager, workerID int) {
 	if debug {
 		log.Printf("[%02d] worker is starting", workerID)
 	}
@@ -232,17 +255,17 @@ func uploadEvents(ctx context.Context, latch *sync.WaitGroup, in chan []h2ologEv
 	ticker := time.NewTicker(tickDuration)
 	for range ticker.C {
 		select {
-		case events := <-in:
-			payload, err := serializeEvents(events)
+		case entry := <-in:
+			objectName := buildObjectName(entry)
+			payload, err := serializeEvents(objectName, entry)
 			if err != nil {
 				log.Fatalf("[%02d] Cannot serialize events: %v", workerID, err)
 			}
 
-			objectName := buildObjectName(events)
 
 			err = storage.write(objectName, payload)
 			if err == nil {
-				log.Printf("[%02d] Uploaded payload as \"%v\" (number of events = %v)", workerID, objectName, len(events))
+				log.Printf("[%02d] Uploaded payload as \"%v\" (number of events = %v)", workerID, objectName, len(entry.events))
 			} else {
 				log.Printf("[%02d] Failed to upload payload as \"%s\": %v", workerID, objectName, err)
 			}
@@ -268,8 +291,7 @@ func main() {
 	var gcsBucketID string
 	var showVersion bool
 
-	flag.Int64Var(&maxSentPn, "max-sent-pn", maxSentPn, fmt.Sprintf("Max packet-number sent (default: %v)", maxSentPn))
-	flag.Int64Var(&maxAckedPn, "max-acked-pn", maxAckedPn, fmt.Sprintf("Max packet-number acked (default: %v)", maxAckedPn))
+	flag.Int64Var(&maxNumEvents, "max-num-events", maxNumEvents, fmt.Sprintf("Max number of events in an object (default: %v)", maxNumEvents))
 	flag.StringVar(&host, "host", host, fmt.Sprintf("The hostname (default: %s)", host))
 	flag.StringVar(&localDir, "local", "", "A local directory in which it stores logs")
 	flag.StringVar(&gcsBucketID, "bucket", "", "A GCS bucket ID in which it stores logs")
@@ -313,7 +335,7 @@ func main() {
 		storage.localDir = &localDir
 	}
 
-	ch := make(chan []h2ologEvent, chanBufferSize)
+	ch := make(chan *logEntry, chanBufferSize)
 	defer close(ch)
 
 	latch := &sync.WaitGroup{}
