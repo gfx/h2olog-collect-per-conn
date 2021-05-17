@@ -335,4 +335,8 @@ func main() {
 	latch := &sync.WaitGroup{}
 	readJSONLine(ctx, &storage, os.Stdin, latch)
 	latch.Wait()
+
+	if debug {
+		log.Printf("[debug] Shutting down")
+	}
 }
