@@ -10,7 +10,6 @@ import (
 	"log"
 	"os"
 	"path"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -22,15 +21,15 @@ import (
 )
 
 const chanBufferSize = 5000
-const maxSentPn = 10
-const maxAckedPn = 10
 const tickDuration = 10 * time.Millisecond
 
 const capacityOfEvents = 4096 // a hint for better performance
 
-var numWorkers = 16
-var host string // -host=s
-var debug bool // -debug
+var numWorkers = 16         // -workers
+var maxSentPn int64 = 1000  // -max-sent-pn or -max-pn
+var maxAckedPn int64 = 1000 // -max-acked-pn or -max-pn
+var host = mustHostname()   // -host=s
+var debug bool              // -debug
 var count uint64 = 0
 
 var finished bool = false
@@ -43,6 +42,7 @@ var authnJson []byte
 //go:embed VERSION
 var version string
 var revision string
+
 type h2ologEvent struct {
 	rawEvent  map[string]interface{}
 	createdAt time.Time // the time when this event is read by the program
@@ -50,30 +50,30 @@ type h2ologEvent struct {
 
 // the schema for GCS objects
 type h2ologEventRoot struct {
-	Host string `json:"host"`
-	StartTime time.Time `json:"start_time"`
-	EndTime time.Time `json:"end_time"`
-	Payload []map[string]interface{} `json:"payload"`
+	Host      string                   `json:"host"`
+	StartTime time.Time                `json:"start_time"`
+	EndTime   time.Time                `json:"end_time"`
+	Payload   []map[string]interface{} `json:"payload"`
 }
 
 // value of connToLogs
 type logEntry struct {
-	connID  int64
-	events  []h2ologEvent
-	sentPn  int64 // the last packet number of "packet-sent"
-	ackedPn int64 // the last packet number of "packet-acked"
+	connID   int64
+	events   []h2ologEvent
+	sentPn   int64 // the last packet number of "packet-sent"
+	ackedPn  int64 // the last packet number of "packet-acked"
 	uploaded bool
 }
 
 type storageManager struct {
-	ctx context.Context
-	bucket *gcs.BucketHandle
+	ctx      context.Context
+	bucket   *gcs.BucketHandle
 	localDir *string
 }
 
 func (self *storageManager) write(objectName string, data []byte) error {
 	if self.localDir != nil {
-		filePath := path.Join(*self.localDir, objectName + ".json")
+		filePath := path.Join(*self.localDir, objectName+".json")
 		err := os.WriteFile(filePath, data, os.ModePerm)
 		if err != nil {
 			log.Fatalf("Cannot write data to a file \"%v\": %v", filePath, err)
@@ -144,10 +144,10 @@ func readJSONLine(out chan []h2ologEvent, reader io.Reader) {
 			entry = value.(*logEntry)
 		} else {
 			entry = &logEntry{
-				connID:  connID,
-				events:  make([]h2ologEvent, 0, capacityOfEvents),
-				sentPn:  -1,
-				ackedPn: -1,
+				connID:   connID,
+				events:   make([]h2ologEvent, 0, capacityOfEvents),
+				sentPn:   -1,
+				ackedPn:  -1,
 				uploaded: false,
 			}
 			connToLogs.Add(connID, entry)
@@ -210,11 +210,11 @@ func serializeEvents(rawEvents []h2ologEvent) ([]byte, error) {
 	for _, event := range rawEvents {
 		events = append(events, event.rawEvent)
 	}
-	return json.Marshal(h2ologEventRoot {
-		Host: host,
+	return json.Marshal(h2ologEventRoot{
+		Host:      host,
 		StartTime: rawEvents[0].createdAt,
-		EndTime: rawEvents[len(rawEvents) - 1].createdAt,
-		Payload: events,
+		EndTime:   rawEvents[len(rawEvents)-1].createdAt,
+		Payload:   events,
 	})
 }
 
@@ -264,27 +264,29 @@ func mustHostname() string {
 }
 
 func main() {
-	hostname := mustHostname()
-
 	var localDir string
 	var gcsBucketID string
 	var showVersion bool
-	flag.IntVar(&numWorkers, "workers", numWorkers, fmt.Sprintf("The number of workers (default: %d)", numWorkers))
-	flag.StringVar(&host, "host", hostname, fmt.Sprintf("The hostname (default: %s)", hostname))
+
+	flag.Int64Var(&maxSentPn, "max-sent-pn", maxSentPn, fmt.Sprintf("Max packet-number sent (default: %v)", maxSentPn))
+	flag.Int64Var(&maxAckedPn, "max-acked-pn", maxAckedPn, fmt.Sprintf("Max packet-number acked (default: %v)", maxAckedPn))
+	flag.StringVar(&host, "host", host, fmt.Sprintf("The hostname (default: %s)", host))
 	flag.StringVar(&localDir, "local", "", "A local directory in which it stores logs")
 	flag.StringVar(&gcsBucketID, "bucket", "", "A GCS bucket ID in which it stores logs")
+
+	flag.IntVar(&numWorkers, "workers", numWorkers, fmt.Sprintf("The number of workers (default: %d)", numWorkers))
 	flag.BoolVar(&debug, "debug", false, "Emit debug logs to STDERR")
 	flag.BoolVar(&showVersion, "version", false, "Show the revision and exit")
 	flag.Parse()
 
-	if (showVersion) {
+	if showVersion {
 		fmt.Printf("%s (rev: %s)\n", strings.TrimSpace(version), revision)
 		os.Exit(0)
 	}
 
 	if len(flag.Args()) != 0 {
-		command := filepath.Base(os.Args[0])
-		fmt.Printf("usage: %s [-help] [-debug] [-bucket=gcsBucketID] [-local=localDir]\n", command)
+		fmt.Fprintf(os.Stderr, "Usage of %s:\n", flag.CommandLine.Name())
+		flag.PrintDefaults()
 		os.Exit(0)
 	}
 
@@ -296,9 +298,9 @@ func main() {
 	}
 	defer client.Close()
 
-	storage := storageManager {
-		ctx: ctx,
-		bucket: nil,
+	storage := storageManager{
+		ctx:      ctx,
+		bucket:   nil,
 		localDir: nil,
 	}
 

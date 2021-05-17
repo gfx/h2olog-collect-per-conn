@@ -37,7 +37,7 @@ test-load: build/$(CMD)
 .PHONY: test-load
 
 test: build/$(CMD)
-	./build/$(CMD) -debug -host test -local ./tmp < test/test.jsonl
+	./build/$(CMD) -debug -max-sent-pn=2 -max-acked-pn=2 -host=test -local=./tmp < test/test.jsonl
 .PHONY: test
 
 test-qlog-adapter: test
