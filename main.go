@@ -209,7 +209,7 @@ func readJSONLine(ctx context.Context, storage *storageManager, reader io.Reader
 
 		if eventType == "free" {
 			if debug {
-				log.Printf("[D] process events: living, connID=%d, type=%v, sentPn=%d, ackedPn=%d, numEvents=%d, len(events)=%d",
+				log.Printf("[D] processing: connID=%d, type=%v, sentPn=%d, ackedPn=%d, numEvents=%d, len(events)=%d",
 					connID, eventType, entry.sentPn, entry.ackedPn, entry.numEvents, len(entry.events))
 			}
 
