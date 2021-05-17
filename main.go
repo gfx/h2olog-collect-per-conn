@@ -42,30 +42,38 @@ var authnJson []byte
 var version string
 var revision string
 
-type h2ologEvent struct {
-	rawEvent  map[string]interface{}
-	createdAt time.Time // the time when this event is read by the program
-}
+type h2ologEvent = map[string]interface{}
 
 // the schema for GCS objects
 type h2ologEventRoot struct {
 	// metadata
-	ID        string    `json:"id"` // same as object Name
-	Host      string    `json:"host"`
-	StartTime time.Time `json:"start_time"`
-	EndTime   time.Time `json:"end_time"`
-	NumEvents uint64    `json:"num_events"`
-	ConnID    int64     `json:"conn_id"`
-	SentPn    int64     `json:"sent_pn"`
-	AckedPn   int64     `json:"acked_pn"`
 
-	// payload
+	// object name
+	ID string `json:"id"`
+	// the guessed hostname or the one specified by -host
+	Host string `json:"host"`
+	// the guessed time at the time when connection started
+	StartTime time.Time `json:"start_time"`
+	// the guessed time at the time when connection ended
+	EndTime time.Time `json:"end_time"`
+	// the total number of events, may be fewer than the number of events in .payload
+	NumEvents uint64 `json:"num_events"`
+	// connection id
+	ConnID int64 `json:"conn_id"`
+	// quicly:packet_sent.pn
+	SentPn int64 `json:"sent_pn"`
+	// quicly:packet_acked.pn
+	AckedPn int64 `json:"acked_pn"`
+
+	// logs that h2olog emitted
 	Payload []map[string]interface{} `json:"payload"`
 }
 
 // value of connToLogs
 type logEntry struct {
 	connID    int64
+	startTime time.Time
+	endTime   time.Time
 	sentPn    int64 // the last packet number of "packet-sent"
 	ackedPn   int64 // the last packet number of "packet-acked"
 	processed bool
@@ -126,7 +134,6 @@ func readJSONLine(out chan *logEntry, reader io.Reader) {
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		now := time.Now()
 
 		var rawEvent map[string]interface{}
 		decoder := json.NewDecoder(strings.NewReader(line))
@@ -154,17 +161,30 @@ func readJSONLine(out chan *logEntry, reader io.Reader) {
 		} else {
 			entry = &logEntry{
 				connID:    connID,
-				events:    make([]h2ologEvent, 0, capacityOfEvents),
+				startTime: time.Time{},
+				endTime:   time.Time{},
 				sentPn:    -1,
 				ackedPn:   -1,
 				processed: false,
 				numEvents: 0,
+				events:    make([]h2ologEvent, 0, capacityOfEvents),
 			}
 			connToLogs.Add(connID, entry)
 		}
 
 		if entry.processed {
 			continue
+		}
+
+		timeMillis, err := rawEvent["time"].(json.Number).Int64()
+		if err == nil {
+			time := millisToTime(timeMillis)
+			if entry.startTime.IsZero() {
+				entry.startTime = time
+			}
+
+			// fill endTime with the recently-received time
+			entry.endTime = time
 		}
 
 		eventType := rawEvent["type"]
@@ -185,10 +205,7 @@ func readJSONLine(out chan *logEntry, reader io.Reader) {
 
 		// +1 is reserved for quicly:free, which is always recorded.
 		if (len(entry.events)+1) < int(maxNumEvents) || eventType == "free" {
-			entry.events = append(entry.events, h2ologEvent{
-				rawEvent:  rawEvent,
-				createdAt: now,
-			})
+			entry.events = append(entry.events, rawEvent)
 		}
 
 		if eventType == "free" {
@@ -206,13 +223,13 @@ func readJSONLine(out chan *logEntry, reader io.Reader) {
 // build a unique GCS object name from events
 func buildObjectName(entry *logEntry) string {
 	// find the quicly:accept event, which probably exists in the first few events.
-	for _, event := range entry.events {
-		if event.rawEvent["type"] == "accept" {
-			dcid := event.rawEvent["dcid"]
+	for _, rawEvent := range entry.events {
+		if rawEvent["type"] == "accept" {
+			dcid := rawEvent["dcid"]
 			if dcid == nil {
 				panic("No dcid is set in quicly:accept")
 			}
-			time := event.rawEvent["time"]
+			time := rawEvent["time"]
 			if time == nil {
 				panic("No time is set in quicly:accept")
 			}
@@ -224,20 +241,16 @@ func buildObjectName(entry *logEntry) string {
 
 func serializeEvents(ID string, entry *logEntry) ([]byte, error) {
 	rawEvents := entry.events
-	events := make([]map[string]interface{}, 0, len(rawEvents))
-	for _, event := range rawEvents {
-		events = append(events, event.rawEvent)
-	}
 	return json.Marshal(h2ologEventRoot{
-		ID: ID,
+		ID:        ID,
 		Host:      host,
-		StartTime: rawEvents[0].createdAt,
-		EndTime:   rawEvents[len(rawEvents)-1].createdAt,
+		StartTime: entry.startTime,
+		EndTime:   entry.endTime,
 		ConnID:    entry.connID,
 		SentPn:    entry.sentPn,
 		AckedPn:   entry.ackedPn,
 		NumEvents: entry.numEvents,
-		Payload:   events,
+		Payload:   rawEvents,
 	})
 }
 
@@ -261,7 +274,6 @@ func uploadEvents(ctx context.Context, latch *sync.WaitGroup, in chan *logEntry,
 			if err != nil {
 				log.Fatalf("[%02d] Cannot serialize events: %v", workerID, err)
 			}
-
 
 			err = storage.write(objectName, payload)
 			if err == nil {
