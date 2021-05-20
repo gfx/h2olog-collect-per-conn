@@ -25,7 +25,6 @@ const capacityOfEvents = 4096 // a hint for better performance
 var maxNumEvents int64 = 100_000 // -max-num-events
 var host = mustHostname()        // -host=s
 var debug bool                   // -debug
-var count uint64 = 0
 
 var connToLogs = mustLruMap(10000)
 
@@ -82,17 +81,17 @@ type storageManager struct {
 	localDir *string
 }
 
-func (self *storageManager) write(objectName string, data []byte) error {
-	if self.localDir != nil {
-		filePath := path.Join(*self.localDir, objectName+".json")
+func (storage *storageManager) write(objectName string, data []byte) error {
+	if storage.localDir != nil {
+		filePath := path.Join(*storage.localDir, objectName+".json")
 		err := os.WriteFile(filePath, data, os.ModePerm)
 		if err != nil {
 			return err
 		}
 	}
-	if self.bucket != nil {
-		object := self.bucket.Object(objectName)
-		writer := object.NewWriter(self.ctx)
+	if storage.bucket != nil {
+		object := storage.bucket.Object(objectName)
+		writer := object.NewWriter(storage.ctx)
 		writer.ContentType = "application/json; utf-8"
 		_, err := writer.Write(data)
 		if err != nil {
@@ -234,7 +233,7 @@ func buildObjectName(entry *logEntry) (string, error) {
 			return fmt.Sprintf("%s-%v-%v", host, dcid, time), nil
 		}
 	}
-	return "", fmt.Errorf("No quicly:accept is found in events (first event type=%s, events=%v)",
+	return "", fmt.Errorf("no quicly:accept is found in events (first event type=%s, events=%v)",
 		entry.events[0]["type"], len(entry.events))
 }
 

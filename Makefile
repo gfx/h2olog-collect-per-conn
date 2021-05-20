@@ -45,6 +45,10 @@ test-qlog-adapter: test
 	$(QLOG_ADAPTER) tmp/test-raw.jsonl | jq .
 .PHONY: test-qlog-adapter
 
+lint:
+	go install honnef.co/go/tools/cmd/staticcheck@latest
+	staticcheck
+
 clean:
 	rm -rf build build.linux-amd64 *.d
 .PHONY: clean
