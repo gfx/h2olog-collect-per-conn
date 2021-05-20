@@ -20,9 +20,6 @@ import (
 	"google.golang.org/api/option"
 )
 
-const chanBufferSize = 5000
-const tickDuration = 10 * time.Millisecond
-
 const capacityOfEvents = 4096 // a hint for better performance
 
 var maxNumEvents int64 = 100_000 // -max-num-events
